@@ -13,6 +13,7 @@ import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.Instruction
 import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
 import com.android.tools.smali.dexlib2.iface.instruction.RegisterRangeInstruction
+import com.android.tools.smali.dexlib2.iface.reference.FieldReference
 import com.android.tools.smali.dexlib2.iface.reference.MethodReference
 import org.w3c.dom.Element
 
@@ -77,11 +78,12 @@ private val crunchyrollPictureInPictureManifestPatch = resourcePatch(
 @Suppress("unused")
 val crunchyrollPictureInPicturePatch = bytecodePatch(
     name = "Enable Picture-in-Picture",
-    description = "Enables Crunchyroll's native Picture-in-Picture while respecting playback state.",
+    description = "Enables Crunchyroll's native Picture-in-Picture and adds a PiP button to the player.",
     default = true,
 ) {
     compatibleWith(COMPATIBILITY_CRUNCHYROLL)
     dependsOn(crunchyrollPictureInPictureManifestPatch)
+    extendWith("extensions/extension.mpe")
 
     execute {
         with(PictureInPictureProviderFingerprint) {
@@ -137,6 +139,101 @@ val crunchyrollPictureInPicturePatch = bytecodePatch(
                     const/16 v$enabledRegister, 0x0
                 """,
             )
+
+            val instructions = method.implementation?.instructions?.toList()
+                ?: throw PatchException(
+                    "Crunchyroll's Picture-in-Picture manager has no implementation."
+                )
+
+            val skipForwardIndex = instructions.indexOfFirst { instruction ->
+                val reference = (instruction as? ReferenceInstruction)
+                    ?.reference as? FieldReference
+
+                reference?.name == "SKIP_FORWARD"
+            }
+
+            if (skipForwardIndex < 0) {
+                throw PatchException(
+                    "Could not locate Crunchyroll's PiP skip-forward action."
+                )
+            }
+
+            val configRelativeIndex = instructions
+                .drop(skipForwardIndex + 1)
+                .indexOfFirst { instruction ->
+                    val reference = (instruction as? ReferenceInstruction)
+                        ?.reference as? MethodReference
+
+                    reference?.name == "<init>" &&
+                        reference.parameterTypes.size == 4 &&
+                        reference.parameterTypes.take(3).all { it == "I" }
+                }
+
+            if (configRelativeIndex < 0) {
+                throw PatchException(
+                    "Could not locate Crunchyroll's PiP skip-forward configuration."
+                )
+            }
+
+            val configIndex = skipForwardIndex + 1 + configRelativeIndex
+            val configCall = instructions[configIndex]
+            val iconRegister = configCall.invokeRegister(1)
+            val titleRegister = configCall.invokeRegister(2)
+            val descriptionRegister = configCall.invokeRegister(3)
+
+            val descriptionUpdate = if (descriptionRegister == titleRegister) {
+                ""
+            } else {
+                """
+                    invoke-static/range {v$descriptionRegister .. v$descriptionRegister}, Lapp/nullwaypoint/extension/crunchyroll/PictureInPicture;->getForwardText(I)I
+                    move-result v$descriptionRegister
+                """
+            }
+
+            method.addInstructions(
+                configIndex,
+                """
+                    invoke-static/range {v$iconRegister .. v$iconRegister}, Lapp/nullwaypoint/extension/crunchyroll/PictureInPicture;->getForwardIcon(I)I
+                    move-result v$iconRegister
+                    invoke-static/range {v$titleRegister .. v$titleRegister}, Lapp/nullwaypoint/extension/crunchyroll/PictureInPicture;->getForwardText(I)I
+                    move-result v$titleRegister
+                    $descriptionUpdate
+                """,
+            )
+
+            method.addInstructions(
+                0,
+                """
+                    invoke-static/range {p0 .. p0}, Lapp/nullwaypoint/extension/crunchyroll/PictureInPicture;->setManager(Ljava/lang/Object;)V
+                """,
+            )
+        }
+
+        with(SkipSegmentButtonFingerprint) {
+            method.addInstructions(
+                0,
+                """
+                    invoke-static/range {p0 .. p0}, Lapp/nullwaypoint/extension/crunchyroll/PictureInPicture;->updateSkipState(Ljava/lang/Object;)V
+                """,
+            )
+        }
+
+        with(PictureInPictureSkipForwardFingerprint) {
+            val forwardInstruction = method.getInstruction(0)
+
+            method.addInstructionsWithLabels(
+                0,
+                """
+                    invoke-static {}, Lapp/nullwaypoint/extension/crunchyroll/PictureInPicture;->skipSegmentIfAvailable()Z
+                    move-result v0
+                    if-eqz v0, :forward
+                    return-void
+                """,
+                ExternalLabel(
+                    "forward",
+                    forwardInstruction,
+                ),
+            )
         }
 
         with(WatchScreenUserLeaveHintFingerprint) {
@@ -151,7 +248,6 @@ val crunchyrollPictureInPicturePatch = bytecodePatch(
                 """,
             )
 
-            // Use the method's existing return as the branch target.
             method.addInstructionsWithLabels(
                 postCall.index,
                 """

@@ -22,6 +22,27 @@ internal object PictureInPictureAutoEnterFingerprint : Fingerprint(
     ),
 )
 
+internal object PictureInPictureSkipForwardFingerprint : Fingerprint(
+    definingClass =
+        "Lcom/crunchyroll/player/presentation/playerview/PlayerViewLayout;",
+    name = "L",
+    returnType = "V",
+    parameters = emptyList(),
+)
+
+internal object SkipSegmentButtonFingerprint : Fingerprint(
+    definingClass = "Lkz/e;",
+    name = "a",
+    returnType = "V",
+    parameters = listOf(
+        "Lkz/f;",
+        "Landroidx/compose/ui/d;",
+        "Lz0/l;",
+        "I",
+        "I",
+    ),
+)
+
 internal object WatchScreenUserLeaveHintFingerprint : Fingerprint(
     definingClass =
         "Lcom/crunchyroll/watchscreen/screen/WatchScreenActivity;",
